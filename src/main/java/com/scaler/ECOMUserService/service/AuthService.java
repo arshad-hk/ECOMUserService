@@ -1,5 +1,8 @@
 package com.scaler.ECOMUserService.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.scaler.ECOMUserService.dto.SignUpRequestDto;
 import com.scaler.ECOMUserService.dto.UserDto;
 import com.scaler.ECOMUserService.exception.InvalidCredentialsException;
 import com.scaler.ECOMUserService.exception.InvalidTokenException;
@@ -18,6 +21,7 @@ import org.apache.commons.lang3.RandomStringUtils;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MultiValueMapAdapter;
@@ -37,13 +41,16 @@ public class AuthService {
     private SecretKey secretKey;
 
     private BCryptPasswordEncoder bCryptPasswordEncoder;
+    private KafkaTemplate<String, String> kafkaTemplate;
 
     private static final String SECRET_KEY = "yourSecretKeyWhichIsStrongEnoughNotToBreak";
 
-    public AuthService(UserRepository userRepository, SessionRepository sessionRepository, BCryptPasswordEncoder bCryptPasswordEncoder) {
+    public AuthService(UserRepository userRepository, SessionRepository sessionRepository, BCryptPasswordEncoder bCryptPasswordEncoder
+                        , KafkaTemplate<String, String> kafkaTemplate) {
         this.userRepository = userRepository;
         this.sessionRepository = sessionRepository;
         this.bCryptPasswordEncoder = bCryptPasswordEncoder;
+        this.kafkaTemplate = kafkaTemplate;
     }
 
     public ResponseEntity<UserDto> login(String email, String password) throws UserNotFoundException, InvalidCredentialsException {
@@ -118,6 +125,20 @@ public class AuthService {
         user.setPassword(bCryptPasswordEncoder.encode(password));
         
         User savedUser = userRepository.save(user);
+
+        // notify the email service via kafka
+        // ideally the dto should consist of only email and some metadata
+        // reusing this dto for now
+        SignUpRequestDto signUpRequestDto = new SignUpRequestDto();
+        signUpRequestDto.setPassword(password);
+        signUpRequestDto.setEmail(email);
+        ObjectMapper objectMapper = new ObjectMapper();
+
+        try {
+            kafkaTemplate.send("email_topic", objectMapper.writeValueAsString(signUpRequestDto));
+        } catch (JsonProcessingException e) {
+            System.out.println("Could not send message over kafka. Exception:"+ e);
+        }
 
         return UserDto.from(savedUser);
     }
